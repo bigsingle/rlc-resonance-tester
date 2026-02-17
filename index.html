@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>RLC共振測定プロッター</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { font-family: sans-serif; text-align: center; margin: 20px; }
+        canvas { max-width: 100%; height: 400px; margin-top: 20px; }
+        .controls { margin-bottom: 20px; }
+        button { padding: 10px 20px; font-size: 16px; cursor: pointer; }
+    </style>
+</head>
+<body>
+    <h1>RLC直列回路 共振測定</h1>
+    <div class="controls">
+        <button id="startBtn">測定開始（マイク許可）</button>
+        <button id="clearBtn">グラフ消去</button>
+    </div>
+    <canvas id="resChart"></canvas>
+
+    <script>
+        let audioContext, analyser, dataArray;
+        const ctx = document.getElementById('resChart').getContext('2d');
+        
+        // Chart.jsの設定（横軸：周波数、縦軸：振幅）
+        const chart = new Chart(ctx, {
+            type: 'scatter',
+            data: { datasets: [{ label: '電流値（相対振幅）', data: [], backgroundColor: 'blue' }] },
+            options: {
+                scales: {
+                    x: { type: 'linear', position: 'bottom', title: { display: true, text: '周波数 [Hz]' }, min: 0, max: 2000 },
+                    y: { title: { display: true, text: '振幅（電流に比例）' }, min: 0 }
+                }
+            }
+        });
+
+        document.getElementById('startBtn').addEventListener('click', async () => {
+            audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            const source = audioContext.createMediaStreamSource(stream);
+            analyser = audioContext.createAnalyser();
+            analyser.fftSize = 4096; // 周波数分解能を高める
+            source.connect(analyser);
+            
+            dataArray = new Uint8Array(analyser.frequencyBinCount);
+            update();
+        });
+
+        function update() {
+            analyser.getByteFrequencyData(dataArray);
+            
+            // 最大振幅を持つ周波数を探す
+            let maxVal = 0;
+            let maxIndex = 0;
+            for (let i = 0; i < dataArray.length; i++) {
+                if (dataArray[i] > maxVal) {
+                    maxVal = dataArray[i];
+                    maxIndex = i;
+                }
+            }
+
+            // 周波数をHzに変換
+            const frequency = maxIndex * audioContext.sampleRate / analyser.fftSize;
+
+            // 一定以上の音量があるときだけプロット（ノイズ対策）
+            if (maxVal > 50) { 
+                chart.data.datasets[0].data.push({ x: frequency, y: maxVal });
+                chart.update('none'); // パフォーマンスのためアニメーションなしで更新
+            }
+            requestAnimationFrame(update);
+        }
+
+        document.getElementById('clearBtn').addEventListener('click', () => {
+            chart.data.datasets[0].data = [];
+            chart.update();
+        });
+    </script>
+</body>
+</html>
