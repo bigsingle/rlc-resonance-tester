@@ -1,151 +1,99 @@
 <!DOCTYPE html>
 <html lang="ja">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>RLC共振測定ツール</title>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <style>
-        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; text-align: center; background: #f4f7f6; color: #333; margin: 0; padding: 20px; }
-        h1 { color: #2c3e50; font-size: 1.5rem; }
-        .data-display { display: flex; justify-content: space-around; background: #fff; padding: 15px; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); margin-bottom: 20px; }
-        .data-item { flex: 1; }
-        .label { font-size: 0.8rem; color: #7f8c8d; }
-        .value { font-size: 1.2rem; font-weight: bold; color: #e74c3c; }
-        .controls { margin-bottom: 20px; display: flex; justify-content: center; gap: 10px; flex-wrap: wrap; }
-        button { padding: 12px 24px; font-size: 1rem; border: none; border-radius: 5px; cursor: pointer; transition: 0.3s; color: white; }
-        #startBtn { background-color: #27ae60; }
-        #pauseBtn { background-color: #f39c12; }
-        #clearBtn { background-color: #c0392b; }
-        button:disabled { background-color: #bdc3c7; cursor: not-allowed; }
-        canvas { background: white; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); width: 100% !important; max-width: 600px; margin: auto; }
-    </style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>RLC Resonance Measurer</title>
+  <style>
+    body { font-family: sans-serif; text-align: center; background: #f4f4f9; padding: 20px; }
+    canvas { background: #111; border-radius: 8px; width: 100%; max-width: 600px; height: 300px; }
+    button { font-size: 1.1rem; padding: 10px 20px; margin: 10px; cursor: pointer; }
+  </style>
 </head>
 <body>
+  <h2>RLC直列回路 共振特性測定器</h2>
+  <button id="startBtn">測定開始 (1kHz - 10kHz スイープ)</button>
+  <br>
+  <canvas id="chartCanvas"></canvas>
 
-    <h1>RLC共振測定プロッター</h1>
+  <script>
+    const startBtn = document.getElementById('startBtn');
+    const canvas = document.getElementById('chartCanvas');
+    const ctx = canvas.getContext('2d');
+    
+    // Canvas解像度設定
+    canvas.width = 600;
+    canvas.height = 300;
 
-    <div class="data-display">
-        <div class="data-item">
-            <div class="label">現在の周波数</div>
-            <div id="currentFreq" class="value">0 Hz</div>
-        </div>
-        <div class="data-item">
-            <div class="label">共振ピーク周波数</div>
-            <div id="peakFreq" class="value">--- Hz</div>
-        </div>
-    </div>
+    startBtn.addEventListener('click', async () => {
+      startBtn.disabled = true;
+      const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      
+      // 1. マイク入力の取得設定
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false } });
+      const micInput = audioCtx.createMediaStreamSource(stream);
+      const analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 2048;
+      micInput.connect(analyser);
 
-    <div class="controls">
-        <button id="startBtn">測定開始</button>
-        <button id="pauseBtn" disabled>一時停止</button>
-        <button id="clearBtn">リセット</button>
-    </div>
+      // 2. 正弦波発振器の設定
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = 'sine';
+      gain.gain.value = 0.8; // 出力振幅 (過大出力回避)
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
 
-    <canvas id="resChart"></canvas>
+      // 3. スイープ測定処理
+      const startFreq = 1000; // 1kHz
+      const endFreq = 10000;   // 10kHz
+      const steps = 100;
+      const stepDuration = 50; // 1ステップあたりのミリ秒
+      
+      const plotData = [];
+      const timeData = new Float32Array(analyser.fftSize);
 
-    <script>
-        let audioContext, analyser, dataArray, animationId;
-        let isMeasuring = false;
-        let maxAmplitude = 0;
-        let peakFrequency = 0;
+      osc.start();
 
-        const ctx = document.getElementById('resChart').getContext('2d');
-        const currentFreqEl = document.getElementById('currentFreq');
-        const peakFreqEl = document.getElementById('peakFreq');
-        const startBtn = document.getElementById('startBtn');
-        const pauseBtn = document.getElementById('pauseBtn');
-        const clearBtn = document.getElementById('clearBtn');
+      for (let i = 0; i <= steps; i++) {
+        const freq = startFreq + (endFreq - startFreq) * (i / steps);
+        osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+        
+        await new Promise(r => setTimeout(r, stepDuration));
 
-        // Chart.js 初期設定
-        const chart = new Chart(ctx, {
-            type: 'scatter',
-            data: { datasets: [{ label: '電流振幅（相対値）', data: [], backgroundColor: 'rgba(52, 152, 219, 0.7)', pointRadius: 3 }] },
-            options: {
-                responsive: true,
-                scales: {
-                    x: { type: 'linear', title: { display: true, text: '周波数 [Hz]' }, min: 0, max: 3000 },
-                    y: { title: { display: true, text: '振幅' }, min: 0, max: 255 }
-                },
-                animation: false
-            }
-        });
-
-        async function initAudio() {
-            if (!audioContext) {
-                audioContext = new (window.AudioContext || window.webkitAudioContext)();
-                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                const source = audioContext.createMediaStreamSource(stream);
-                analyser = audioContext.createAnalyser();
-                analyser.fftSize = 8192; // 解像度を高く設定
-                source.connect(analyser);
-                dataArray = new Uint8Array(analyser.frequencyBinCount);
-            }
-            if (audioContext.state === 'suspended') {
-                await audioContext.resume();
-            }
+        // 波形データから実効値(振幅)を算出
+        analyser.getFloatTimeDomainData(timeData);
+        let sumSquares = 0;
+        for (let j = 0; j < timeData.length; j++) {
+          sumSquares += timeData[j] * timeData[j];
         }
+        const rms = Math.sqrt(sumSquares / timeData.length);
+        plotData.push({ freq, rms });
 
-        function update() {
-            if (!isMeasuring) return;
+        // リアルタイム描画
+        drawChart(plotData, startFreq, endFreq);
+      }
 
-            analyser.getByteFrequencyData(dataArray);
+      osc.stop();
+      startBtn.disabled = false;
+    });
 
-            let currentMaxAmp = 0;
-            let currentMaxIdx = 0;
+    function drawChart(data, minF, maxF) {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.strokeStyle = '#00ffcc';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
 
-            // ノイズ除去のため特定の範囲(100Hz〜)で最大を探す
-            for (let i = 20; i < dataArray.length; i++) {
-                if (dataArray[i] > currentMaxAmp) {
-                    currentMaxAmp = dataArray[i];
-                    currentMaxIdx = i;
-                }
-            }
+      const maxRms = Math.max(...data.map(d => d.rms), 0.01);
 
-            const frequency = Math.round(currentMaxIdx * audioContext.sampleRate / analyser.fftSize);
-
-            // 有意な音量がある場合のみプロット
-            if (currentMaxAmp > 40) {
-                currentFreqEl.innerText = `${frequency} Hz`;
-                chart.data.datasets[0].data.push({ x: frequency, y: currentMaxAmp });
-                chart.update('none');
-
-                // ピーク検出
-                if (currentMaxAmp > maxAmplitude) {
-                    maxAmplitude = currentMaxAmp;
-                    peakFrequency = frequency;
-                    peakFreqEl.innerText = `${peakFrequency} Hz`;
-                }
-            }
-
-            animationId = requestAnimationFrame(update);
-        }
-
-        startBtn.onclick = async () => {
-            await initAudio();
-            isMeasuring = true;
-            startBtn.disabled = true;
-            pauseBtn.disabled = false;
-            startBtn.innerText = "測定中...";
-            update();
-        };
-
-        pauseBtn.onclick = () => {
-            isMeasuring = false;
-            cancelAnimationFrame(animationId);
-            startBtn.disabled = false;
-            pauseBtn.disabled = true;
-            startBtn.innerText = "再開";
-        };
-
-        clearBtn.onclick = () => {
-            chart.data.datasets[0].data = [];
-            maxAmplitude = 0;
-            peakFrequency = 0;
-            peakFreqEl.innerText = "--- Hz";
-            currentFreqEl.innerText = "0 Hz";
-            chart.update();
-        };
-    </script>
+      data.forEach((pt, index) => {
+        const x = ((pt.freq - minF) / (maxF - minF)) * canvas.width;
+        const y = canvas.height - (pt.rms / maxRms) * (canvas.height - 40) - 20;
+        if (index === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+    }
+  </script>
 </body>
 </html>
