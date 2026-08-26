@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>RLC直列共振回路 共振周波数測定実験</title>
+  <title>RLC直列共振周波数測定</title>
   <style>
     body {
       font-family: 'Helvetica Neue', Arial, sans-serif;
@@ -97,7 +97,7 @@
 <body>
 
 <div class="container">
-  <h2>RLC直列共振回路 共振周波数測定実験</h2>
+  <h2>RLC直列共振周波数測定</h2>
 
   <!-- パラメータ入力領域 (理論値計算) -->
   <div class="input-panel">
@@ -142,15 +142,15 @@
   const inputL = document.getElementById('valL');
   const inputC = document.getElementById('valC');
 
-  // Canvas高解像度化（高精細化対応）
+  // Canvas高解像度化
   canvas.width = 700;
   canvas.height = 350;
 
-  // 測定条件設定
+  // 測定条件設定 (10秒間でスイープ)
   const startFreq = 10;      // 10 Hz
   const endFreq = 10000;     // 10000 Hz
-  const sweepDuration = 25;  // 25 秒
-  const intervalMs = 50;     // 50msごとに1ステップ計測 (計500ステップ)
+  const sweepDuration = 10;  // 10 秒
+  const intervalMs = 20;     // 20msごとに1ステップ計測 (計500ステップ)
   const totalSteps = (sweepDuration * 1000) / intervalMs;
 
   let isMeasuring = false;
@@ -198,7 +198,7 @@
     const plotWidth = canvas.width - paddingLeft - paddingRight;
     const plotHeight = canvas.height - paddingTop - paddingBottom;
 
-    // 1. グリッドと横軸目盛りの描画 (100Hzごとの目印, 1000Hzごとの数値)
+    // 1. グリッドと横軸目盛りの描画
     ctx.lineWidth = 1;
     ctx.textAlign = 'center';
     ctx.font = '10px sans-serif';
@@ -218,7 +218,7 @@
         ctx.fillStyle = '#aaa';
         ctx.fillText(`${f}Hz`, x, canvas.height - 15);
       } else {
-        // 100Hzごとの小目印 (目盛りのヒゲ)
+        // 100Hzごとの小目印
         ctx.strokeStyle = '#666';
         ctx.beginPath();
         ctx.moveTo(x, paddingTop + plotHeight);
@@ -301,7 +301,7 @@
 
       const timeData = new Float32Array(analyser.fftSize);
 
-      // スイープタイマーの開始
+      // スイープタイマーの開始 (10秒間)
       timerId = setInterval(() => {
         if (currentStep > totalSteps) {
           stopMeasurement();
