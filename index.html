@@ -285,7 +285,10 @@
       osc = audioCtx.createOscillator();
       const gain = audioCtx.createGain();
       osc.type = 'sine';
-      gain.gain.value = 0.8;
+      
+      // 出力ゲインを 0.8 から 0.2 に下げて過大入力を抑止
+      gain.gain.value = 0.2; 
+      
       osc.connect(gain);
       gain.connect(audioCtx.destination);
 
