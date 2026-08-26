@@ -3,65 +3,318 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>RLC Resonance Measurer</title>
+  <title>RLC直列共振回路 共振周波数測定実験</title>
   <style>
-    body { font-family: sans-serif; text-align: center; background: #f4f4f9; padding: 20px; }
-    canvas { background: #111; border-radius: 8px; width: 100%; max-width: 600px; height: 300px; }
-    button { font-size: 1.1rem; padding: 10px 20px; margin: 10px; cursor: pointer; }
+    body {
+      font-family: 'Helvetica Neue', Arial, sans-serif;
+      text-align: center;
+      background: #f4f4f9;
+      color: #333;
+      padding: 20px;
+      margin: 0;
+    }
+    .container {
+      max-width: 700px;
+      margin: 0 auto;
+      background: #fff;
+      padding: 20px;
+      border-radius: 12px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+    }
+    h2 {
+      margin-top: 0;
+      color: #2c3e50;
+    }
+    .input-panel {
+      display: flex;
+      justify-content: space-around;
+      flex-wrap: wrap;
+      background: #eef2f5;
+      padding: 12px;
+      border-radius: 8px;
+      margin-bottom: 15px;
+    }
+    .input-group {
+      margin: 5px 10px;
+    }
+    .input-group label {
+      font-weight: bold;
+      margin-right: 5px;
+    }
+    .input-group input {
+      width: 70px;
+      padding: 4px 8px;
+      font-size: 1rem;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      text-align: right;
+    }
+    .calc-result {
+      margin-bottom: 15px;
+      font-weight: bold;
+      color: #d35400;
+    }
+    .control-panel {
+      margin-bottom: 15px;
+    }
+    button {
+      font-size: 1.1rem;
+      padding: 10px 24px;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    .btn-start {
+      background: #27ae60;
+      color: white;
+    }
+    .btn-start:hover {
+      background: #219150;
+    }
+    .btn-stop {
+      background: #e74c3c;
+      color: white;
+    }
+    .btn-stop:hover {
+      background: #c0392b;
+    }
+    .status-display {
+      font-size: 1.2rem;
+      font-family: monospace;
+      margin-bottom: 10px;
+      height: 1.5em;
+    }
+    canvas {
+      background: #1e1e1e;
+      border-radius: 8px;
+      width: 100%;
+      height: 350px;
+      display: block;
+    }
   </style>
 </head>
 <body>
-  <h2>RLC直列回路 共振特性測定器</h2>
-  <button id="startBtn">測定開始 (1kHz - 10kHz スイープ)</button>
-  <br>
+
+<div class="container">
+  <h2>RLC直列共振回路 共振周波数測定実験</h2>
+
+  <!-- パラメータ入力領域 (理論値計算) -->
+  <div class="input-panel">
+    <div class="input-group">
+      <label for="valR">R [Ω]:</label>
+      <input type="number" id="valR" value="100" step="any">
+    </div>
+    <div class="input-group">
+      <label for="valL">L [mH]:</label>
+      <input type="number" id="valL" value="10" step="any">
+    </div>
+    <div class="input-group">
+      <label for="valC">C [nF]:</label>
+      <input type="number" id="valC" value="100" step="any">
+    </div>
+  </div>
+
+  <div class="calc-result" id="calcResult">
+    共振周波数 理論値 (f₀): ---- Hz
+  </div>
+
+  <div class="control-panel">
+    <button id="toggleBtn" class="btn-start">測定開始（10Hz→10000Hzスイープ）</button>
+  </div>
+
+  <div class="status-display" id="statusDisplay">
+    現在出力周波数: ---- Hz
+  </div>
+
   <canvas id="chartCanvas"></canvas>
+</div>
 
-  <script>
-    const startBtn = document.getElementById('startBtn');
-    const canvas = document.getElementById('chartCanvas');
-    const ctx = canvas.getContext('2d');
-    
-    // Canvas解像度設定
-    canvas.width = 600;
-    canvas.height = 300;
+<script>
+  // 要素の取得
+  const toggleBtn = document.getElementById('toggleBtn');
+  const statusDisplay = document.getElementById('statusDisplay');
+  const calcResult = document.getElementById('calcResult');
+  const canvas = document.getElementById('chartCanvas');
+  const ctx = canvas.getContext('2d');
 
-    startBtn.addEventListener('click', async () => {
-      startBtn.disabled = true;
-      const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  const inputR = document.getElementById('valR');
+  const inputL = document.getElementById('valL');
+  const inputC = document.getElementById('valC');
+
+  // Canvas高解像度化（高精細化対応）
+  canvas.width = 700;
+  canvas.height = 350;
+
+  // 測定条件設定
+  const startFreq = 10;      // 10 Hz
+  const endFreq = 10000;     // 10000 Hz
+  const sweepDuration = 25;  // 25 秒
+  const intervalMs = 50;     // 50msごとに1ステップ計測 (計500ステップ)
+  const totalSteps = (sweepDuration * 1000) / intervalMs;
+
+  let isMeasuring = false;
+  let audioCtx = null;
+  let osc = null;
+  let micInput = null;
+  let analyser = null;
+  let stream = null;
+  let currentStep = 0;
+  let timerId = null;
+  let plotData = [];
+  let theoreticalFreq = null;
+
+  // --- 理論値計算機能 ---
+  function updateTheoreticalFreq() {
+    const R = parseFloat(inputR.value);
+    const L_mH = parseFloat(inputL.value);
+    const C_nF = parseFloat(inputC.value);
+
+    if (L_mH > 0 && C_nF > 0) {
+      const L = L_mH * 1e-3; // mH -> H
+      const C = C_nF * 1e-9; // nF -> F
+      theoreticalFreq = 1 / (2 * Math.PI * Math.sqrt(L * C));
+      calcResult.innerText = `共振周波数 理論値 (f₀): ${theoreticalFreq.toFixed(1)} Hz`;
+    } else {
+      theoreticalFreq = null;
+      calcResult.innerText = `共振周波数 理論値 (f₀): 計算不可`;
+    }
+    drawChart();
+  }
+
+  [inputR, inputL, inputC].forEach(input => {
+    input.addEventListener('input', updateTheoreticalFreq);
+  });
+
+  // --- 描画処理 (グラフ・目盛り・理論値線) ---
+  function drawChart() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    const paddingLeft = 50;
+    const paddingRight = 20;
+    const paddingTop = 20;
+    const paddingBottom = 40;
+
+    const plotWidth = canvas.width - paddingLeft - paddingRight;
+    const plotHeight = canvas.height - paddingTop - paddingBottom;
+
+    // 1. グリッドと横軸目盛りの描画 (100Hzごとの目印, 1000Hzごとの数値)
+    ctx.lineWidth = 1;
+    ctx.textAlign = 'center';
+    ctx.font = '10px sans-serif';
+
+    for (let f = 0; f <= endFreq; f += 100) {
+      if (f < startFreq) continue;
+      const x = paddingLeft + ((f - startFreq) / (endFreq - startFreq)) * plotWidth;
+
+      if (f % 1000 === 0) {
+        // 1000Hzごとのグリッド線と数値ラベル
+        ctx.strokeStyle = '#444';
+        ctx.beginPath();
+        ctx.moveTo(x, paddingTop);
+        ctx.lineTo(x, paddingTop + plotHeight);
+        ctx.stroke();
+
+        ctx.fillStyle = '#aaa';
+        ctx.fillText(`${f}Hz`, x, canvas.height - 15);
+      } else {
+        // 100Hzごとの小目印 (目盛りのヒゲ)
+        ctx.strokeStyle = '#666';
+        ctx.beginPath();
+        ctx.moveTo(x, paddingTop + plotHeight);
+        ctx.lineTo(x, paddingTop + plotHeight - 5);
+        ctx.stroke();
+      }
+    }
+
+    // 外枠を描画
+    ctx.strokeStyle = '#666';
+    ctx.strokeRect(paddingLeft, paddingTop, plotWidth, plotHeight);
+
+    // 2. 理論値線の描画 (黄色破線)
+    if (theoreticalFreq && theoreticalFreq >= startFreq && theoreticalFreq <= endFreq) {
+      const xTheory = paddingLeft + ((theoreticalFreq - startFreq) / (endFreq - startFreq)) * plotWidth;
+      ctx.strokeStyle = '#f1c40f';
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([4, 4]);
+      ctx.beginPath();
+      ctx.moveTo(xTheory, paddingTop);
+      ctx.lineTo(xTheory, paddingTop + plotHeight);
+      ctx.stroke();
+      ctx.setLineDash([]); // 破線リセット
+
+      ctx.fillStyle = '#f1c40f';
+      ctx.textAlign = 'left';
+      ctx.fillText(`理論値 f₀`, xTheory + 5, paddingTop + 15);
+    }
+
+    // 3. 実測波形のプロット
+    if (plotData.length > 0) {
+      ctx.strokeStyle = '#00ffcc';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+
+      const maxRms = Math.max(...plotData.map(d => d.rms), 0.01);
+
+      plotData.forEach((pt, index) => {
+        const x = paddingLeft + ((pt.freq - startFreq) / (endFreq - startFreq)) * plotWidth;
+        const y = paddingTop + plotHeight - (pt.rms / maxRms) * (plotHeight - 10);
+
+        if (index === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+    }
+  }
+
+  // --- 測定制御関数 ---
+  async function startMeasurement() {
+    try {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
       
-      // 1. マイク入力の取得設定
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false } });
-      const micInput = audioCtx.createMediaStreamSource(stream);
-      const analyser = audioCtx.createAnalyser();
+      // マイク入力設定（ノイズキャンセラー無効化）
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
+      });
+      micInput = audioCtx.createMediaStreamSource(stream);
+      analyser = audioCtx.createAnalyser();
       analyser.fftSize = 2048;
       micInput.connect(analyser);
 
-      // 2. 正弦波発振器の設定
-      const osc = audioCtx.createOscillator();
+      // 発振器設定
+      osc = audioCtx.createOscillator();
       const gain = audioCtx.createGain();
       osc.type = 'sine';
-      gain.gain.value = 0.8; // 出力振幅 (過大出力回避)
+      gain.gain.value = 0.8;
       osc.connect(gain);
       gain.connect(audioCtx.destination);
 
-      // 3. スイープ測定処理
-      const startFreq = 1000; // 1kHz
-      const endFreq = 10000;   // 10kHz
-      const steps = 100;
-      const stepDuration = 50; // 1ステップあたりのミリ秒
-      
-      const plotData = [];
-      const timeData = new Float32Array(analyser.fftSize);
-
       osc.start();
 
-      for (let i = 0; i <= steps; i++) {
-        const freq = startFreq + (endFreq - startFreq) * (i / steps);
-        osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
-        
-        await new Promise(r => setTimeout(r, stepDuration));
+      isMeasuring = true;
+      currentStep = 0;
+      plotData = [];
 
-        // 波形データから実効値(振幅)を算出
+      // UI表示切替
+      toggleBtn.innerText = "測定中止";
+      toggleBtn.className = "btn-stop";
+
+      const timeData = new Float32Array(analyser.fftSize);
+
+      // スイープタイマーの開始
+      timerId = setInterval(() => {
+        if (currentStep > totalSteps) {
+          stopMeasurement();
+          return;
+        }
+
+        // 線形スイープ周波数計算
+        const freq = startFreq + (endFreq - startFreq) * (currentStep / totalSteps);
+        osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+
+        statusDisplay.innerText = `現在出力周波数: ${freq.toFixed(1)} Hz`;
+
+        // 実効値（振幅）取得
         analyser.getFloatTimeDomainData(timeData);
         let sumSquares = 0;
         for (let j = 0; j < timeData.length; j++) {
@@ -70,30 +323,46 @@
         const rms = Math.sqrt(sumSquares / timeData.length);
         plotData.push({ freq, rms });
 
-        // リアルタイム描画
-        drawChart(plotData, startFreq, endFreq);
-      }
+        drawChart();
+        currentStep++;
+      }, intervalMs);
 
-      osc.stop();
-      startBtn.disabled = false;
-    });
-
-    function drawChart(data, minF, maxF) {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      ctx.strokeStyle = '#00ffcc';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-
-      const maxRms = Math.max(...data.map(d => d.rms), 0.01);
-
-      data.forEach((pt, index) => {
-        const x = ((pt.freq - minF) / (maxF - minF)) * canvas.width;
-        const y = canvas.height - (pt.rms / maxRms) * (canvas.height - 40) - 20;
-        if (index === 0) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
-      });
-      ctx.stroke();
+    } catch (err) {
+      alert("マイクへのアクセス許可が必要です: " + err);
+      stopMeasurement();
     }
-  </script>
+  }
+
+  function stopMeasurement() {
+    if (timerId) clearInterval(timerId);
+    if (osc) {
+      try { osc.stop(); } catch(e){}
+    }
+    if (stream) {
+      stream.getTracks().forEach(track => track.stop());
+    }
+    if (audioCtx) {
+      audioCtx.close();
+    }
+
+    isMeasuring = false;
+    toggleBtn.innerText = "測定開始（10Hz→10000Hzスイープ）";
+    toggleBtn.className = "btn-start";
+    statusDisplay.innerText = "現在出力周波数: ---- Hz";
+  }
+
+  // ボタンクリックで開始/中止を切替
+  toggleBtn.addEventListener('click', () => {
+    if (isMeasuring) {
+      stopMeasurement();
+    } else {
+      startMeasurement();
+    }
+  });
+
+  // 初期描画処理
+  updateTheoreticalFreq();
+</script>
+
 </body>
 </html>
