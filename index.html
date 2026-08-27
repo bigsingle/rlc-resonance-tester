@@ -146,21 +146,17 @@
   canvas.width = 700;
   canvas.height = 350;
 
-  // 測定条件設定 (10秒間でスイープ)
-  const startFreq = 10;      // 10 Hz
-  const endFreq = 10000;     // 10000 Hz
-  const sweepDuration = 10;  // 10 秒
-  const intervalMs = 20;     // 20msごとに1ステップ計測 (計500ステップ)
-  const totalSteps = (sweepDuration * 1000) / intervalMs;
+  // 測定条件設定
+  const startFreq = 10;       // 10 Hz
+  const endFreq = 10000;      // 10000 Hz
+  const sweepDuration = 10;   // 10 秒
 
   let isMeasuring = false;
   let audioCtx = null;
   let osc = null;
   let micInput = null;
-  let analyser = null;
+  let processor = null;
   let stream = null;
-  let currentStep = 0;
-  let timerId = null;
   let plotData = [];
   let theoreticalFreq = null;
 
@@ -267,68 +263,74 @@
     }
   }
 
-  // --- 測定制御関数 ---
+  // --- 測定制御関数 (オーディオクロック完全同期版) ---
   async function startMeasurement() {
     try {
       audioCtx = new (window.AudioContext || window.webkitAudioContext)();
       
-      // マイク入力設定（ノイズキャンセラー無効化）
+      // マイク入力設定（OS側の音声処理を無効化）
       stream = await navigator.mediaDevices.getUserMedia({
         audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
       });
       micInput = audioCtx.createMediaStreamSource(stream);
-      analyser = audioCtx.createAnalyser();
-      analyser.fftSize = 2048;
-      micInput.connect(analyser);
 
       // 発振器設定
       osc = audioCtx.createOscillator();
       const gain = audioCtx.createGain();
       osc.type = 'sine';
-      
-      // 出力ゲインを 0.8 から 0.2 に下げて過大入力を抑止
-      gain.gain.value = 0.2; 
-      
+      gain.gain.value = 0.5; // 入力レベル調整のためやや抑制
       osc.connect(gain);
       gain.connect(audioCtx.destination);
+
+      // オーディオ同期用プロセッサー (バッファサイズ 2048 サンプル = 約43ms周期)
+      const bufferSize = 2048;
+      processor = audioCtx.createScriptProcessor(bufferSize, 1, 1);
+
+      micInput.connect(processor);
+      processor.connect(audioCtx.destination); // イベントループ駆動に必要
 
       osc.start();
 
       isMeasuring = true;
-      currentStep = 0;
       plotData = [];
+
+      const startTime = audioCtx.currentTime;
 
       // UI表示切替
       toggleBtn.innerText = "測定中止";
       toggleBtn.className = "btn-stop";
 
-      const timeData = new Float32Array(analyser.fftSize);
+      // 音声フレーム更新のたびに完全同期して実行されるコールバック
+      processor.onaudioprocess = (e) => {
+        if (!isMeasuring) return;
 
-      // スイープタイマーの開始 (10秒間)
-      timerId = setInterval(() => {
-        if (currentStep > totalSteps) {
+        const elapsedTime = audioCtx.currentTime - startTime;
+        const progress = elapsedTime / sweepDuration;
+
+        // 規定時間（10秒）に達したら停止
+        if (progress >= 1.0) {
           stopMeasurement();
           return;
         }
 
-        // 線形スイープ周波数計算
-        const freq = startFreq + (endFreq - startFreq) * (currentStep / totalSteps);
+        // 1. ハードウェア時刻から厳密な現在周波数を算出・設定
+        const freq = startFreq + (endFreq - startFreq) * progress;
         osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
 
         statusDisplay.innerText = `現在出力周波数: ${freq.toFixed(1)} Hz`;
 
-        // 実効値（振幅）取得
-        analyser.getFloatTimeDomainData(timeData);
+        // 2. 到着した最新の音声バッファから直接RMS（実効値）を計算
+        const inputData = e.inputBuffer.getChannelData(0);
         let sumSquares = 0;
-        for (let j = 0; j < timeData.length; j++) {
-          sumSquares += timeData[j] * timeData[j];
+        for (let i = 0; i < inputData.length; i++) {
+          sumSquares += inputData[i] * inputData[i];
         }
-        const rms = Math.sqrt(sumSquares / timeData.length);
-        plotData.push({ freq, rms });
+        const rms = Math.sqrt(sumSquares / inputData.length);
 
+        // 3. データの記録と再描画
+        plotData.push({ freq, rms });
         drawChart();
-        currentStep++;
-      }, intervalMs);
+      };
 
     } catch (err) {
       alert("マイクへのアクセス許可が必要です: " + err);
@@ -337,9 +339,15 @@
   }
 
   function stopMeasurement() {
-    if (timerId) clearInterval(timerId);
+    isMeasuring = false;
+
+    if (processor) {
+      processor.onaudioprocess = null;
+      processor.disconnect();
+    }
     if (osc) {
       try { osc.stop(); } catch(e){}
+      osc.disconnect();
     }
     if (stream) {
       stream.getTracks().forEach(track => track.stop());
@@ -348,7 +356,6 @@
       audioCtx.close();
     }
 
-    isMeasuring = false;
     toggleBtn.innerText = "測定開始（10Hz→10000Hzスイープ）";
     toggleBtn.className = "btn-start";
     statusDisplay.innerText = "現在出力周波数: ---- Hz";
