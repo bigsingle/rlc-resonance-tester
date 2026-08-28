@@ -99,19 +99,19 @@
 <div class="container">
   <h2>RLC直列共振周波数測定</h2>
 
-  <!-- パラメータ入力領域 (理論値計算) -->
+  <!-- パラメータ入力領域 (初期値: R=1Ω, L=100mH, C=10nF) -->
   <div class="input-panel">
     <div class="input-group">
       <label for="valR">R [Ω]:</label>
-      <input type="number" id="valR" value="100" step="any">
+      <input type="number" id="valR" value="1" step="any">
     </div>
     <div class="input-group">
       <label for="valL">L [mH]:</label>
-      <input type="number" id="valL" value="10" step="any">
+      <input type="number" id="valL" value="100" step="any">
     </div>
     <div class="input-group">
       <label for="valC">C [nF]:</label>
-      <input type="number" id="valC" value="100" step="any">
+      <input type="number" id="valC" value="10" step="any">
     </div>
   </div>
 
@@ -120,7 +120,7 @@
   </div>
 
   <div class="control-panel">
-    <button id="toggleBtn" class="btn-start">測定開始（10Hz→10000Hzスイープ）</button>
+    <button id="toggleBtn" class="btn-start">測定開始（300Hz→10000Hzスイープ）</button>
   </div>
 
   <div class="status-display" id="statusDisplay">
@@ -146,8 +146,8 @@
   canvas.width = 700;
   canvas.height = 350;
 
-  // 測定条件設定
-  const startFreq = 10;       // 10 Hz
+  // 測定条件設定 (300Hz 〜 10000Hz)
+  const startFreq = 300;      // 300 Hz
   const endFreq = 10000;      // 10000 Hz
   const sweepDuration = 10;   // 10 秒
 
@@ -199,8 +199,8 @@
     ctx.textAlign = 'center';
     ctx.font = '10px sans-serif';
 
-    for (let f = 0; f <= endFreq; f += 100) {
-      if (f < startFreq) continue;
+    // 100Hzごとに小目印、1000Hzごとにグリッドとラベルを描画
+    for (let f = 300; f <= endFreq; f += 100) {
       const x = paddingLeft + ((f - startFreq) / (endFreq - startFreq)) * plotWidth;
 
       if (f % 1000 === 0) {
@@ -223,6 +223,11 @@
       }
     }
 
+    // 左端（300Hz）のラベル明記
+    const xStart = paddingLeft;
+    ctx.fillStyle = '#aaa';
+    ctx.fillText(`${startFreq}Hz`, xStart, canvas.height - 15);
+
     // 外枠を描画
     ctx.strokeStyle = '#666';
     ctx.strokeRect(paddingLeft, paddingTop, plotWidth, plotHeight);
@@ -241,7 +246,7 @@
 
       ctx.fillStyle = '#f1c40f';
       ctx.textAlign = 'left';
-      ctx.fillText(`理論値 f₀`, xTheory + 5, paddingTop + 15);
+      ctx.fillText(`理論値 f₀ (${theoreticalFreq.toFixed(0)}Hz)`, xTheory + 5, paddingTop + 15);
     }
 
     // 3. 実測波形のプロット
@@ -250,7 +255,7 @@
       ctx.lineWidth = 2;
       ctx.beginPath();
 
-      const maxRms = Math.max(...plotData.map(d => d.rms), 0.01);
+      const maxRms = Math.max(...plotData.map(d => d.rms), 0.001);
 
       plotData.forEach((pt, index) => {
         const x = paddingLeft + ((pt.freq - startFreq) / (endFreq - startFreq)) * plotWidth;
@@ -263,14 +268,18 @@
     }
   }
 
-  // --- 測定制御関数 (オーディオクロック完全同期版) ---
+  // --- 測定制御関数 ---
   async function startMeasurement() {
     try {
       audioCtx = new (window.AudioContext || window.webkitAudioContext)();
       
-      // マイク入力設定（OS側の音声処理を無効化）
+      // マイク入力設定（自動調整・エコーキャンセラー等を全てOFF維持）
       stream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
+        audio: { 
+          echoCancellation: false, 
+          noiseSuppression: false, 
+          autoGainControl: false 
+        }
       });
       micInput = audioCtx.createMediaStreamSource(stream);
 
@@ -278,16 +287,19 @@
       osc = audioCtx.createOscillator();
       const gain = audioCtx.createGain();
       osc.type = 'sine';
-      gain.gain.value = 0.5; // 入力レベル調整のためやや抑制
+      
+      // 出力ゲインを 0.15（0.1〜0.2程度）に抑えて内部漏れ込みを防止
+      gain.gain.value = 0.15; 
+      
       osc.connect(gain);
       gain.connect(audioCtx.destination);
 
-      // オーディオ同期用プロセッサー (バッファサイズ 2048 サンプル = 約43ms周期)
+      // オーディオ同期用プロセッサー (バッファサイズ 2048 サンプル)
       const bufferSize = 2048;
       processor = audioCtx.createScriptProcessor(bufferSize, 1, 1);
 
       micInput.connect(processor);
-      processor.connect(audioCtx.destination); // イベントループ駆動に必要
+      processor.connect(audioCtx.destination);
 
       osc.start();
 
@@ -300,7 +312,7 @@
       toggleBtn.innerText = "測定中止";
       toggleBtn.className = "btn-stop";
 
-      // 音声フレーム更新のたびに完全同期して実行されるコールバック
+      // 音声フレーム同期処理
       processor.onaudioprocess = (e) => {
         if (!isMeasuring) return;
 
@@ -313,13 +325,13 @@
           return;
         }
 
-        // 1. ハードウェア時刻から厳密な現在周波数を算出・設定
+        // 1. 周波数の設定 (300Hz 〜 10000Hz)
         const freq = startFreq + (endFreq - startFreq) * progress;
         osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
 
         statusDisplay.innerText = `現在出力周波数: ${freq.toFixed(1)} Hz`;
 
-        // 2. 到着した最新の音声バッファから直接RMS（実効値）を計算
+        // 2. RMS（実効値）の計算
         const inputData = e.inputBuffer.getChannelData(0);
         let sumSquares = 0;
         for (let i = 0; i < inputData.length; i++) {
@@ -327,7 +339,7 @@
         }
         const rms = Math.sqrt(sumSquares / inputData.length);
 
-        // 3. データの記録と再描画
+        // 3. データ記録と描画
         plotData.push({ freq, rms });
         drawChart();
       };
@@ -356,12 +368,12 @@
       audioCtx.close();
     }
 
-    toggleBtn.innerText = "測定開始（10Hz→10000Hzスイープ）";
+    toggleBtn.innerText = "測定開始（300Hz→10000Hzスイープ）";
     toggleBtn.className = "btn-start";
     statusDisplay.innerText = "現在出力周波数: ---- Hz";
   }
 
-  // ボタンクリックで開始/中止を切替
+  // ボタンイベント接続
   toggleBtn.addEventListener('click', () => {
     if (isMeasuring) {
       stopMeasurement();
