@@ -99,7 +99,7 @@
 <div class="container">
   <h2>RLC直列共振周波数測定</h2>
 
-  <!-- パラメータ入力領域 (初期値: R=1Ω, L=100mH, C=10nF) -->
+  <!-- パラメータ入力領域 -->
   <div class="input-panel">
     <div class="input-group">
       <label for="valR">R [Ω]:</label>
@@ -120,7 +120,7 @@
   </div>
 
   <div class="control-panel">
-    <button id="toggleBtn" class="btn-start">測定開始（300Hz→10000Hzスイープ）</button>
+    <button id="toggleBtn" class="btn-start">測定開始（1Hz→10000Hzスイープ）</button>
   </div>
 
   <div class="status-display" id="statusDisplay">
@@ -146,10 +146,12 @@
   canvas.width = 700;
   canvas.height = 350;
 
-  // 測定条件設定 (300Hz 〜 10000Hz)
-  const startFreq = 300;      // 300 Hz
-  const endFreq = 10000;      // 10000 Hz
-  const sweepDuration = 10;   // 10 秒
+  // 測定条件と表示範囲の設定
+  const sweepStartFreq = 1;     // 測定開始周波数: 1 Hz
+  const sweepEndFreq = 10000;   // 測定終了周波数: 10000 Hz
+  const displayMinFreq = 300;   // グラフ表示最小周波数: 300 Hz
+  const displayMaxFreq = 10000; // グラフ表示最大周波数: 10000 Hz
+  const sweepDuration = 10;     // 10 秒
 
   let isMeasuring = false;
   let audioCtx = null;
@@ -182,7 +184,7 @@
     input.addEventListener('input', updateTheoreticalFreq);
   });
 
-  // --- 描画処理 (グラフ・目盛り・理論値線) ---
+  // --- 描画処理 (300Hz〜10000Hz範囲のグラフ描画) ---
   function drawChart() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
@@ -199,9 +201,9 @@
     ctx.textAlign = 'center';
     ctx.font = '10px sans-serif';
 
-    // 100Hzごとに小目印、1000Hzごとにグリッドとラベルを描画
-    for (let f = 300; f <= endFreq; f += 100) {
-      const x = paddingLeft + ((f - startFreq) / (endFreq - startFreq)) * plotWidth;
+    // 300Hzから10000Hzの範囲でグリッドを描画
+    for (let f = displayMinFreq; f <= displayMaxFreq; f += 100) {
+      const x = paddingLeft + ((f - displayMinFreq) / (displayMaxFreq - displayMinFreq)) * plotWidth;
 
       if (f % 1000 === 0) {
         // 1000Hzごとのグリッド線と数値ラベル
@@ -213,8 +215,8 @@
 
         ctx.fillStyle = '#aaa';
         ctx.fillText(`${f}Hz`, x, canvas.height - 15);
-      } else {
-        // 100Hzごとの小目印
+      } else if (f % 500 === 0) {
+        // 500Hzごとの目印
         ctx.strokeStyle = '#666';
         ctx.beginPath();
         ctx.moveTo(x, paddingTop + plotHeight);
@@ -226,15 +228,15 @@
     // 左端（300Hz）のラベル明記
     const xStart = paddingLeft;
     ctx.fillStyle = '#aaa';
-    ctx.fillText(`${startFreq}Hz`, xStart, canvas.height - 15);
+    ctx.fillText(`${displayMinFreq}Hz`, xStart, canvas.height - 15);
 
     // 外枠を描画
     ctx.strokeStyle = '#666';
     ctx.strokeRect(paddingLeft, paddingTop, plotWidth, plotHeight);
 
-    // 2. 理論値線の描画 (黄色破線)
-    if (theoreticalFreq && theoreticalFreq >= startFreq && theoreticalFreq <= endFreq) {
-      const xTheory = paddingLeft + ((theoreticalFreq - startFreq) / (endFreq - startFreq)) * plotWidth;
+    // 2. 理論値線の描画 (表示範囲内にある場合のみ描画)
+    if (theoreticalFreq && theoreticalFreq >= displayMinFreq && theoreticalFreq <= displayMaxFreq) {
+      const xTheory = paddingLeft + ((theoreticalFreq - displayMinFreq) / (displayMaxFreq - displayMinFreq)) * plotWidth;
       ctx.strokeStyle = '#f1c40f';
       ctx.lineWidth = 1.5;
       ctx.setLineDash([4, 4]);
@@ -242,23 +244,26 @@
       ctx.moveTo(xTheory, paddingTop);
       ctx.lineTo(xTheory, paddingTop + plotHeight);
       ctx.stroke();
-      ctx.setLineDash([]); // 破線リセット
+      ctx.setLineDash([]);
 
       ctx.fillStyle = '#f1c40f';
       ctx.textAlign = 'left';
       ctx.fillText(`理論値 f₀ (${theoreticalFreq.toFixed(0)}Hz)`, xTheory + 5, paddingTop + 15);
     }
 
-    // 3. 実測波形のプロット
-    if (plotData.length > 0) {
+    // 3. 実測波形のプロット (300Hz以上のデータのみを抽出して描画)
+    const visibleData = plotData.filter(d => d.freq >= displayMinFreq && d.freq <= displayMaxFreq);
+
+    if (visibleData.length > 0) {
       ctx.strokeStyle = '#00ffcc';
       ctx.lineWidth = 2;
       ctx.beginPath();
 
-      const maxRms = Math.max(...plotData.map(d => d.rms), 0.001);
+      // 表示範囲内の最大RMS値で正規化
+      const maxRms = Math.max(...visibleData.map(d => d.rms), 0.001);
 
-      plotData.forEach((pt, index) => {
-        const x = paddingLeft + ((pt.freq - startFreq) / (endFreq - startFreq)) * plotWidth;
+      visibleData.forEach((pt, index) => {
+        const x = paddingLeft + ((pt.freq - displayMinFreq) / (displayMaxFreq - displayMinFreq)) * plotWidth;
         const y = paddingTop + plotHeight - (pt.rms / maxRms) * (plotHeight - 10);
 
         if (index === 0) ctx.moveTo(x, y);
@@ -273,7 +278,7 @@
     try {
       audioCtx = new (window.AudioContext || window.webkitAudioContext)();
       
-      // マイク入力設定（自動調整・エコーキャンセラー等を全てOFF維持）
+      // マイク入力設定
       stream = await navigator.mediaDevices.getUserMedia({
         audio: { 
           echoCancellation: false, 
@@ -287,14 +292,11 @@
       osc = audioCtx.createOscillator();
       const gain = audioCtx.createGain();
       osc.type = 'sine';
-      
-      // 出力ゲインを 0.15（0.1〜0.2程度）に抑えて内部漏れ込みを防止
-      gain.gain.value = 0.15; 
+      gain.gain.value = 0.15; // アダプタ内部漏れ防止のための出力ゲイン抑制
       
       osc.connect(gain);
       gain.connect(audioCtx.destination);
 
-      // オーディオ同期用プロセッサー (バッファサイズ 2048 サンプル)
       const bufferSize = 2048;
       processor = audioCtx.createScriptProcessor(bufferSize, 1, 1);
 
@@ -308,30 +310,27 @@
 
       const startTime = audioCtx.currentTime;
 
-      // UI表示切替
       toggleBtn.innerText = "測定中止";
       toggleBtn.className = "btn-stop";
 
-      // 音声フレーム同期処理
       processor.onaudioprocess = (e) => {
         if (!isMeasuring) return;
 
         const elapsedTime = audioCtx.currentTime - startTime;
         const progress = elapsedTime / sweepDuration;
 
-        // 規定時間（10秒）に達したら停止
         if (progress >= 1.0) {
           stopMeasurement();
           return;
         }
 
-        // 1. 周波数の設定 (300Hz 〜 10000Hz)
-        const freq = startFreq + (endFreq - startFreq) * progress;
+        // 測定周波数は 1Hz から 10000Hz までリニアスイープ
+        const freq = sweepStartFreq + (sweepEndFreq - sweepStartFreq) * progress;
         osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
 
         statusDisplay.innerText = `現在出力周波数: ${freq.toFixed(1)} Hz`;
 
-        // 2. RMS（実効値）の計算
+        // RMS（実効値）の計算
         const inputData = e.inputBuffer.getChannelData(0);
         let sumSquares = 0;
         for (let i = 0; i < inputData.length; i++) {
@@ -339,7 +338,7 @@
         }
         const rms = Math.sqrt(sumSquares / inputData.length);
 
-        // 3. データ記録と描画
+        // 全データを記録 (描画関数内で 300Hz 以上のみ表示判断)
         plotData.push({ freq, rms });
         drawChart();
       };
@@ -368,12 +367,11 @@
       audioCtx.close();
     }
 
-    toggleBtn.innerText = "測定開始（300Hz→10000Hzスイープ）";
+    toggleBtn.innerText = "測定開始（1Hz→10000Hzスイープ）";
     toggleBtn.className = "btn-start";
     statusDisplay.innerText = "現在出力周波数: ---- Hz";
   }
 
-  // ボタンイベント接続
   toggleBtn.addEventListener('click', () => {
     if (isMeasuring) {
       stopMeasurement();
