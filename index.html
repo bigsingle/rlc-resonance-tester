@@ -83,12 +83,13 @@
     .status-display {
       font-size: 1.1rem;
       font-family: monospace;
-      margin-bottom: 10px;
+      margin-bottom: 5px;
       height: 1.5em;
     }
     .mic-info {
-      font-size: 0.85rem;
-      color: #666;
+      font-size: 0.9rem;
+      color: #2980b9;
+      font-weight: bold;
       margin-bottom: 10px;
     }
     canvas {
@@ -194,7 +195,7 @@
     input.addEventListener('input', updateTheoreticalFreq);
   });
 
-  // --- 描画処理 (横軸 0Hz〜10000Hz, プロット 300Hz〜10000Hz) ---
+  // --- 描画処理 ---
   function drawChart() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
@@ -253,7 +254,7 @@
       ctx.fillText(`理論値 f0`, xTheory + 5, paddingTop + 15);
     }
 
-    // 3. 実測波形の処理とプロット (300Hz以上のデータ抽出 & 300Hz電圧の90%を差引)
+    // 3. 実測波形のプロット (300Hz以上のデータ抽出 & 300Hz電圧の90%を差し引く)
     const rawVisibleData = plotData.filter(d => d.freq >= plotMinFreq && d.freq <= axisMaxFreq);
 
     if (rawVisibleData.length > 0) {
@@ -265,7 +266,6 @@
         rms: Math.max(0, d.rms - offsetV)
       }));
 
-      // 最大振幅（ピーク）の検索
       let peakPoint = processedData[0];
       processedData.forEach(pt => {
         if (pt.rms > peakPoint.rms) {
@@ -275,7 +275,6 @@
 
       const maxRms = Math.max(...processedData.map(d => d.rms), 0.0001);
 
-      // 実測波形の描画
       ctx.strokeStyle = '#00ffcc';
       ctx.lineWidth = 2;
       ctx.beginPath();
@@ -289,7 +288,7 @@
       });
       ctx.stroke();
 
-      // 4. ピーク値の表示 (赤色点とテキスト)
+      // 4. ピーク値表示
       if (peakPoint && peakPoint.rms > 0) {
         const peakX = paddingLeft + ((peakPoint.freq - axisMinFreq) / (axisMaxFreq - axisMinFreq)) * plotWidth;
         const peakY = paddingTop + plotHeight - (peakPoint.rms / maxRms) * (plotHeight - 10);
@@ -309,10 +308,55 @@
     }
   }
 
-  // --- 測定制御関数 (iOSルーティング対策統合版) ---
+  // --- 外部デバイス全検索＆強制的ルーティング制御処理 ---
+  async function getExternalAudioDevices() {
+    // 機器リスト取得のために仮アクセス
+    const tempStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    tempStream.getTracks().forEach(track => track.stop()); // 一時ストリームは閉じる
+
+    const audioInputs = devices.filter(d => d.kind === 'audioinput');
+    const audioOutputs = devices.filter(d => d.kind === 'audiooutput');
+
+    // 外部ヘッドセット/USB/Externalのキーワード検索
+    const externalInput = audioInputs.find(d => 
+      /headset|external|usb|アダプタ|イヤホン|マイク端子/i.test(d.label)
+    );
+
+    const externalOutput = audioOutputs.find(d => 
+      /headset|external|usb|headphone|アダプタ|イヤホン/i.test(d.label)
+    );
+
+    return {
+      inputId: externalInput ? externalInput.deviceId : null,
+      inputLabel: externalInput ? externalInput.label : (audioInputs[0] ? audioInputs[0].label : "標準マイク"),
+      outputId: externalOutput ? externalOutput.deviceId : null
+    };
+  }
+
+  // --- 測定制御関数 ---
   async function startMeasurement() {
     try {
-      // 1. AudioContextの生成と初期化
+      // 1. デバイス検索とID特定
+      const targetDevices = await getExternalAudioDevices();
+      
+      // 2. マイク入力の強制制約設定
+      const audioConstraints = {
+        echoCancellation: false,
+        noiseSuppression: false,
+        autoGainControl: false,
+        channelCount: { exact: 1 }
+      };
+
+      // 外部マイクIDが見つかれば「exact」で絶対指定
+      if (targetDevices.inputId) {
+        audioConstraints.deviceId = { exact: targetDevices.inputId };
+      }
+
+      stream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints });
+      micInfo.innerText = `使用マイク: ${targetDevices.inputLabel}`;
+
+      // 3. AudioContext 生成
       const AudioContextClass = window.AudioContext || window.webkitAudioContext;
       audioCtx = new AudioContextClass({ latencyHint: 'interactive' });
 
@@ -320,35 +364,25 @@
         await audioCtx.resume();
       }
 
-      // 2. マイク入力の取得 (iOSで外部マイクを優先する制約を付与)
-      stream = await navigator.mediaDevices.getUserMedia({
-        audio: { 
-          echoCancellation: false, 
-          noiseSuppression: false, 
-          autoGainControl: false,
-          channelCount: { exact: 1 } // モノラル固定で外部ヘッドセットを探索
-        }
-      });
-
-      // 現在認識されているマイク名の表示
-      const audioTracks = stream.getAudioTracks();
-      if (audioTracks.length > 0) {
-        const trackLabel = audioTracks[0].label || "外部/内蔵マイク";
-        micInfo.innerText = `使用マイク: ${trackLabel}`;
+      // 出力先デバイス（SinkID）の強制指定（対応ブラウザのみ）
+      if (targetDevices.outputId && typeof audioCtx.setSinkId === 'function') {
+        try {
+          await audioCtx.setSinkId(targetDevices.outputId);
+        } catch(e) { console.log("setSinkId非対応:", e); }
       }
 
       micInput = audioCtx.createMediaStreamSource(stream);
 
-      // 3. 発振器設定
+      // 4. 発振器設定
       osc = audioCtx.createOscillator();
       const gain = audioCtx.createGain();
       osc.type = 'sine';
-      gain.gain.value = 0.15; // アダプタ内部漏れ防止のための出力ゲイン設定
+      gain.gain.value = 0.15; // アダプタ内部漏洩防止用ゲイン
       
       osc.connect(gain);
       gain.connect(audioCtx.destination); // 外部ジャックへ出力
 
-      // 4. 音声同期プロセッサーの設定
+      // 5. プロセッサーの設定
       const bufferSize = 2048;
       processor = audioCtx.createScriptProcessor(bufferSize, 1, 1);
 
@@ -376,13 +410,11 @@
           return;
         }
 
-        // 1Hz 〜 10000Hz スイープ
         const freq = sweepStartFreq + (sweepEndFreq - sweepStartFreq) * progress;
         osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
 
         statusDisplay.innerText = `現在出力周波数= ${freq.toFixed(1)} Hz`;
 
-        // RMS（実効値）の計算
         const inputData = e.inputBuffer.getChannelData(0);
         let sumSquares = 0;
         for (let i = 0; i < inputData.length; i++) {
@@ -395,7 +427,7 @@
       };
 
     } catch (err) {
-      alert("マイクへのアクセス許可が必要です、または機器の接続順序を確認してください: " + err);
+      alert("外部マイクの読み込みに失敗しました。アダプタとケーブルの接続を確認してください: " + err);
       stopMeasurement();
     }
   }
