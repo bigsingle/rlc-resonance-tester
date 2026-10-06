@@ -14,7 +14,7 @@
       margin: 0;
     }
     .container {
-      max-width: 800px;
+      max-width: 850px;
       margin: 0 auto;
       background: #fff;
       padding: 20px;
@@ -66,7 +66,7 @@
       background: #1e1e1e;
       border-radius: 8px;
       width: 100%;
-      height: 400px;
+      height: 420px;
       display: block;
     }
     .mic-info {
@@ -113,7 +113,6 @@
 
   <canvas id="chartCanvas"></canvas>
 
-  <!-- 使用マイクの表示を最下部に移動 -->
   <div class="mic-info mic-warning" id="micInfo">
     使用マイク: 未接続（アダプタを挿して「測定開始」を押してください）
   </div>
@@ -131,9 +130,9 @@
   const inputL = document.getElementById('valL');
   const inputC = document.getElementById('valC');
 
-  // Canvas高解像度化
-  canvas.width = 800;
-  canvas.height = 400;
+  // Canvas内部解像度を高めて文字・波形をクッキリ表示
+  canvas.width = 900;
+  canvas.height = 450;
 
   const sweepStartFreq = 1;
   const sweepEndFreq = 10000;
@@ -174,14 +173,15 @@
   function drawChart() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    const paddingLeft = 60, paddingRight = 30, paddingTop = 80, paddingBottom = 40;
+    // テキスト領域を確保するためのPadding設定
+    const paddingLeft = 60, paddingRight = 40, paddingTop = 90, paddingBottom = 40;
     const plotWidth = canvas.width - paddingLeft - paddingRight;
     const plotHeight = canvas.height - paddingTop - paddingBottom;
 
     // 1. グリッドと横軸目盛りの描画
     ctx.lineWidth = 1;
     ctx.textAlign = 'center';
-    ctx.font = '10px sans-serif';
+    ctx.font = '11px sans-serif';
 
     for (let f = axisMinFreq; f <= axisMaxFreq; f += 100) {
       const x = paddingLeft + ((f - axisMinFreq) / (axisMaxFreq - axisMinFreq)) * plotWidth;
@@ -199,7 +199,7 @@
     ctx.strokeStyle = '#666';
     ctx.strokeRect(paddingLeft, paddingTop, plotWidth, plotHeight);
 
-    // 2. ピーク（理論値）の描画（黄色破線＋大文字表示）
+    // 2. ピーク（理論値）の描画（黄色の垂直破線 ＋ 40pxテキスト）
     if (theoreticalFreq && theoreticalFreq >= axisMinFreq && theoreticalFreq <= axisMaxFreq) {
       const xTheory = paddingLeft + ((theoreticalFreq - axisMinFreq) / (axisMaxFreq - axisMinFreq)) * plotWidth;
       
@@ -209,13 +209,22 @@
       ctx.beginPath(); ctx.moveTo(xTheory, paddingTop); ctx.lineTo(xTheory, paddingTop + plotHeight); ctx.stroke();
       ctx.setLineDash([]);
 
-      ctx.font = 'bold 40px sans-serif';
+      ctx.font = 'bold 36px sans-serif';
       ctx.fillStyle = '#ffff00';
-      ctx.textAlign = 'left';
-      ctx.fillText(`ピーク理論値 ${theoreticalFreq.toFixed(1)}Hz`, xTheory + 10, paddingTop - 10);
+
+      // 左右のはみ出し自動防止（位置に応じた揃え変更）
+      if (xTheory < paddingLeft + 180) {
+        ctx.textAlign = 'left';
+      } else if (xTheory > canvas.width - paddingRight - 180) {
+        ctx.textAlign = 'right';
+      } else {
+        ctx.textAlign = 'center';
+      }
+
+      ctx.fillText(`ピーク理論値 ${theoreticalFreq.toFixed(1)}Hz`, xTheory, paddingTop - 25);
     }
 
-    // 3. 全取得データのプロット（カット・加工なし）
+    // 3. 全取得データの描画（カットなし）
     if (plotData.length > 0) {
       let peakPoint = plotData[0];
       plotData.forEach(pt => {
@@ -236,7 +245,7 @@
       });
       ctx.stroke();
 
-      // 4. ピーク（実験値）の描画（明るいオレンジ色＋大文字表示）
+      // 4. ピーク（実験値）の描画（明るいオレンジ色 ＋ 40pxテキスト）
       if (peakPoint && peakPoint.rms > 0) {
         const peakX = paddingLeft + ((peakPoint.freq - axisMinFreq) / (axisMaxFreq - axisMinFreq)) * plotWidth;
         const peakY = paddingTop + plotHeight - (peakPoint.rms / maxRms) * (plotHeight - 10);
@@ -244,16 +253,31 @@
         ctx.fillStyle = '#ff9f43';
         ctx.beginPath(); ctx.arc(peakX, peakY, 7, 0, Math.PI * 2); ctx.fill();
 
-        ctx.font = 'bold 40px sans-serif';
+        ctx.font = 'bold 36px sans-serif';
         ctx.fillStyle = '#ff9f43';
-        ctx.textAlign = 'right';
-        
-        ctx.fillText(`ピーク実験値 ${peakPoint.freq.toFixed(0)}Hz`, peakX - 10, peakY + 10);
+
+        // X軸方向のはみ出し防止調整
+        let targetX = peakX;
+        if (peakX < paddingLeft + 180) {
+          ctx.textAlign = 'left';
+        } else if (peakX > canvas.width - paddingRight - 180) {
+          ctx.textAlign = 'right';
+        } else {
+          ctx.textAlign = 'center';
+        }
+
+        // Y軸方向の調整（頂点付近で枠上部へのはみ出しを防ぐ）
+        let targetY = peakY - 15;
+        if (targetY < paddingTop + 30) {
+          targetY = peakY + 45; // ピークが上端に近い場合はピーク点の下側へ描画
+        }
+
+        ctx.fillText(`ピーク実験値 ${peakPoint.freq.toFixed(0)}Hz`, targetX, targetY);
       }
     }
   }
 
-  // --- 外部マイク取得ロジック ---
+  // --- 外部マイクの判定・取得ロジック ---
   async function getAudioStream() {
     const initStream = await navigator.mediaDevices.getUserMedia({ audio: true });
     const devices = await navigator.mediaDevices.enumerateDevices();
@@ -353,7 +377,6 @@
         }
         const rms = Math.sqrt(sumSquares / inputData.length);
 
-        // 全データをそのまま追加
         plotData.push({ freq, rms });
         drawChart();
       };
