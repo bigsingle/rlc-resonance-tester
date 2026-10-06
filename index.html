@@ -14,7 +14,7 @@
       margin: 0;
     }
     .container {
-      max-width: 750px;
+      max-width: 800px;
       margin: 0 auto;
       background: #fff;
       padding: 20px;
@@ -59,25 +59,25 @@
     .status-display {
       font-size: 1.1rem;
       font-family: monospace;
-      margin-bottom: 5px;
+      margin-bottom: 10px;
       height: 1.5em;
     }
-    .mic-info {
-      font-size: 0.95rem;
-      font-weight: bold;
-      margin-bottom: 10px;
-      padding: 6px;
-      border-radius: 4px;
-    }
-    .mic-success { color: #27ae60; background: #e8f8f5; }
-    .mic-warning { color: #c0392b; background: #fadbd8; }
     canvas {
       background: #1e1e1e;
       border-radius: 8px;
       width: 100%;
-      height: 350px;
+      height: 400px;
       display: block;
     }
+    .mic-info {
+      font-size: 0.95rem;
+      font-weight: bold;
+      margin-top: 15px;
+      padding: 8px;
+      border-radius: 6px;
+    }
+    .mic-success { color: #27ae60; background: #e8f8f5; }
+    .mic-warning { color: #c0392b; background: #fadbd8; }
   </style>
 </head>
 <body>
@@ -110,11 +110,13 @@
   <div class="status-display" id="statusDisplay">
     現在出力周波数= ---- Hz
   </div>
+
+  <canvas id="chartCanvas"></canvas>
+
+  <!-- 使用マイクの表示を最下部に移動 -->
   <div class="mic-info mic-warning" id="micInfo">
     使用マイク: 未接続（アダプタを挿して「測定開始」を押してください）
   </div>
-
-  <canvas id="chartCanvas"></canvas>
 </div>
 
 <script>
@@ -129,14 +131,14 @@
   const inputL = document.getElementById('valL');
   const inputC = document.getElementById('valC');
 
-  canvas.width = 700;
-  canvas.height = 350;
+  // Canvas高解像度化
+  canvas.width = 800;
+  canvas.height = 400;
 
   const sweepStartFreq = 1;
   const sweepEndFreq = 10000;
   const axisMinFreq = 0;
   const axisMaxFreq = 10000;
-  const plotMinFreq = 300;
   const sweepDuration = 10;
 
   let isMeasuring = false;
@@ -172,10 +174,11 @@
   function drawChart() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    const paddingLeft = 50, paddingRight = 20, paddingTop = 20, paddingBottom = 40;
+    const paddingLeft = 60, paddingRight = 30, paddingTop = 80, paddingBottom = 40;
     const plotWidth = canvas.width - paddingLeft - paddingRight;
     const plotHeight = canvas.height - paddingTop - paddingBottom;
 
+    // 1. グリッドと横軸目盛りの描画
     ctx.lineWidth = 1;
     ctx.textAlign = 'center';
     ctx.font = '10px sans-serif';
@@ -196,41 +199,36 @@
     ctx.strokeStyle = '#666';
     ctx.strokeRect(paddingLeft, paddingTop, plotWidth, plotHeight);
 
+    // 2. ピーク（理論値）の描画（黄色破線＋大文字表示）
     if (theoreticalFreq && theoreticalFreq >= axisMinFreq && theoreticalFreq <= axisMaxFreq) {
       const xTheory = paddingLeft + ((theoreticalFreq - axisMinFreq) / (axisMaxFreq - axisMinFreq)) * plotWidth;
-      ctx.strokeStyle = '#f1c40f';
-      ctx.lineWidth = 1.5;
-      ctx.setLineDash([4, 4]);
+      
+      ctx.strokeStyle = '#ffff00';
+      ctx.lineWidth = 2;
+      ctx.setLineDash([5, 5]);
       ctx.beginPath(); ctx.moveTo(xTheory, paddingTop); ctx.lineTo(xTheory, paddingTop + plotHeight); ctx.stroke();
       ctx.setLineDash([]);
-      ctx.fillStyle = '#f1c40f';
+
+      ctx.font = 'bold 40px sans-serif';
+      ctx.fillStyle = '#ffff00';
       ctx.textAlign = 'left';
-      ctx.fillText(`理論値 f0`, xTheory + 5, paddingTop + 15);
+      ctx.fillText(`ピーク理論値 ${theoreticalFreq.toFixed(1)}Hz`, xTheory + 10, paddingTop - 10);
     }
 
-    const rawVisibleData = plotData.filter(d => d.freq >= plotMinFreq && d.freq <= axisMaxFreq);
-
-    if (rawVisibleData.length > 0) {
-      const v300 = rawVisibleData[0].rms;
-      const offsetV = v300 * 0.9;
-
-      const processedData = rawVisibleData.map(d => ({
-        freq: d.freq,
-        rms: Math.max(0, d.rms - offsetV)
-      }));
-
-      let peakPoint = processedData[0];
-      processedData.forEach(pt => {
+    // 3. 全取得データのプロット（カット・加工なし）
+    if (plotData.length > 0) {
+      let peakPoint = plotData[0];
+      plotData.forEach(pt => {
         if (pt.rms > peakPoint.rms) peakPoint = pt;
       });
 
-      const maxRms = Math.max(...processedData.map(d => d.rms), 0.0001);
+      const maxRms = Math.max(...plotData.map(d => d.rms), 0.0001);
 
       ctx.strokeStyle = '#00ffcc';
       ctx.lineWidth = 2;
       ctx.beginPath();
 
-      processedData.forEach((pt, index) => {
+      plotData.forEach((pt, index) => {
         const x = paddingLeft + ((pt.freq - axisMinFreq) / (axisMaxFreq - axisMinFreq)) * plotWidth;
         const y = paddingTop + plotHeight - (pt.rms / maxRms) * (plotHeight - 10);
         if (index === 0) ctx.moveTo(x, y);
@@ -238,31 +236,30 @@
       });
       ctx.stroke();
 
+      // 4. ピーク（実験値）の描画（明るいオレンジ色＋大文字表示）
       if (peakPoint && peakPoint.rms > 0) {
         const peakX = paddingLeft + ((peakPoint.freq - axisMinFreq) / (axisMaxFreq - axisMinFreq)) * plotWidth;
         const peakY = paddingTop + plotHeight - (peakPoint.rms / maxRms) * (plotHeight - 10);
 
-        ctx.fillStyle = '#ff4757';
-        ctx.beginPath(); ctx.arc(peakX, peakY, 5, 0, Math.PI * 2); ctx.fill();
-        ctx.font = 'bold 12px sans-serif';
-        ctx.fillStyle = '#ff4757';
-        ctx.textAlign = 'center';
-        const textY = peakY - 10 < paddingTop + 10 ? peakY + 20 : peakY - 10;
-        ctx.fillText(`Peak: ${peakPoint.freq.toFixed(0)}Hz`, peakX, textY);
+        ctx.fillStyle = '#ff9f43';
+        ctx.beginPath(); ctx.arc(peakX, peakY, 7, 0, Math.PI * 2); ctx.fill();
+
+        ctx.font = 'bold 40px sans-serif';
+        ctx.fillStyle = '#ff9f43';
+        ctx.textAlign = 'right';
+        
+        ctx.fillText(`ピーク実験値 ${peakPoint.freq.toFixed(0)}Hz`, peakX - 10, peakY + 10);
       }
     }
   }
 
-  // --- 外部マイクの判別と取得ロジック ---
+  // --- 外部マイク取得ロジック ---
   async function getAudioStream() {
-    // 1. 仮アクセスでラベルを有効化
     const initStream = await navigator.mediaDevices.getUserMedia({ audio: true });
     const devices = await navigator.mediaDevices.enumerateDevices();
     initStream.getTracks().forEach(t => t.stop());
 
     const audioInputs = devices.filter(d => d.kind === 'audioinput');
-    
-    // 2. 「iPhoneマイク」「iPadマイク」「Built-in」以外の外部マイクを探索
     const externalDevice = audioInputs.find(d => 
       !/iphone|ipad|built-in|内蔵/i.test(d.label) && d.label !== ""
     );
@@ -281,8 +278,6 @@
     const finalStream = await navigator.mediaDevices.getUserMedia({ audio: selectedConstraints });
     const activeTrack = finalStream.getAudioTracks()[0];
     const label = activeTrack.label || "外部マイク";
-
-    // 3. 本体マイクが選ばれてしまっているかどうかの警告判定
     const isBuiltIn = /iphone|ipad|built-in|内蔵/i.test(label);
 
     return { stream: finalStream, label: label, isBuiltIn: isBuiltIn };
@@ -314,7 +309,7 @@
       osc = audioCtx.createOscillator();
       const gain = audioCtx.createGain();
       osc.type = 'sine';
-      gain.gain.value = 0.12; // アダプタでの飽和（ノイズ）を防ぐため低めに設定
+      gain.gain.value = 0.12;
       
       osc.connect(gain);
       gain.connect(audioCtx.destination);
@@ -358,6 +353,7 @@
         }
         const rms = Math.sqrt(sumSquares / inputData.length);
 
+        // 全データをそのまま追加
         plotData.push({ freq, rms });
         drawChart();
       };
