@@ -130,7 +130,6 @@
   const inputL = document.getElementById('valL');
   const inputC = document.getElementById('valC');
 
-  // Canvas内部解像度を高めて文字・波形をクッキリ表示
   canvas.width = 900;
   canvas.height = 450;
 
@@ -173,12 +172,11 @@
   function drawChart() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    // テキスト領域を確保するためのPadding設定
     const paddingLeft = 60, paddingRight = 40, paddingTop = 90, paddingBottom = 40;
     const plotWidth = canvas.width - paddingLeft - paddingRight;
     const plotHeight = canvas.height - paddingTop - paddingBottom;
 
-    // 1. グリッドと横軸目盛りの描画
+    // 1. グリッドと横軸目盛り
     ctx.lineWidth = 1;
     ctx.textAlign = 'center';
     ctx.font = '11px sans-serif';
@@ -199,7 +197,7 @@
     ctx.strokeStyle = '#666';
     ctx.strokeRect(paddingLeft, paddingTop, plotWidth, plotHeight);
 
-    // 2. ピーク（理論値）の描画（黄色の垂直破線 ＋ 40pxテキスト）
+    // 2. ピーク（理論値）の描画
     if (theoreticalFreq && theoreticalFreq >= axisMinFreq && theoreticalFreq <= axisMaxFreq) {
       const xTheory = paddingLeft + ((theoreticalFreq - axisMinFreq) / (axisMaxFreq - axisMinFreq)) * plotWidth;
       
@@ -212,7 +210,6 @@
       ctx.font = 'bold 36px sans-serif';
       ctx.fillStyle = '#ffff00';
 
-      // 左右のはみ出し自動防止（位置に応じた揃え変更）
       if (xTheory < paddingLeft + 180) {
         ctx.textAlign = 'left';
       } else if (xTheory > canvas.width - paddingRight - 180) {
@@ -224,14 +221,17 @@
       ctx.fillText(`ピーク理論値 ${theoreticalFreq.toFixed(1)}Hz`, xTheory, paddingTop - 25);
     }
 
-    // 3. 全取得データの描画（カットなし）
+    // 3. 全取得データの描画（過渡ノイズ除去対策組み込み）
     if (plotData.length > 0) {
-      let peakPoint = plotData[0];
-      plotData.forEach(pt => {
+      // 300Hz以上の有効データから真の共振ピークと最大振幅（スケール）を算出
+      const validDataForPeak = plotData.filter(d => d.freq >= 300);
+      
+      let peakPoint = validDataForPeak.length > 0 ? validDataForPeak[0] : plotData[0];
+      validDataForPeak.forEach(pt => {
         if (pt.rms > peakPoint.rms) peakPoint = pt;
       });
 
-      const maxRms = Math.max(...plotData.map(d => d.rms), 0.0001);
+      const maxRms = Math.max(...(validDataForPeak.length > 0 ? validDataForPeak : plotData).map(d => d.rms), 0.0001);
 
       ctx.strokeStyle = '#00ffcc';
       ctx.lineWidth = 2;
@@ -239,13 +239,16 @@
 
       plotData.forEach((pt, index) => {
         const x = paddingLeft + ((pt.freq - axisMinFreq) / (axisMaxFreq - axisMinFreq)) * plotWidth;
-        const y = paddingTop + plotHeight - (pt.rms / maxRms) * (plotHeight - 10);
+        // 低周波スパイクでグラフの上枠を突き抜けないよう最大値でクリッピング
+        const normalizedRms = Math.min(pt.rms, maxRms);
+        const y = paddingTop + plotHeight - (normalizedRms / maxRms) * (plotHeight - 10);
+        
         if (index === 0) ctx.moveTo(x, y);
         else ctx.lineTo(x, y);
       });
       ctx.stroke();
 
-      // 4. ピーク（実験値）の描画（明るいオレンジ色 ＋ 40pxテキスト）
+      // 4. ピーク（実験値）の描画
       if (peakPoint && peakPoint.rms > 0) {
         const peakX = paddingLeft + ((peakPoint.freq - axisMinFreq) / (axisMaxFreq - axisMinFreq)) * plotWidth;
         const peakY = paddingTop + plotHeight - (peakPoint.rms / maxRms) * (plotHeight - 10);
@@ -256,7 +259,6 @@
         ctx.font = 'bold 36px sans-serif';
         ctx.fillStyle = '#ff9f43';
 
-        // X軸方向のはみ出し防止調整
         let targetX = peakX;
         if (peakX < paddingLeft + 180) {
           ctx.textAlign = 'left';
@@ -266,10 +268,9 @@
           ctx.textAlign = 'center';
         }
 
-        // Y軸方向の調整（頂点付近で枠上部へのはみ出しを防ぐ）
         let targetY = peakY - 15;
         if (targetY < paddingTop + 30) {
-          targetY = peakY + 45; // ピークが上端に近い場合はピーク点の下側へ描画
+          targetY = peakY + 45;
         }
 
         ctx.fillText(`ピーク実験値 ${peakPoint.freq.toFixed(0)}Hz`, targetX, targetY);
