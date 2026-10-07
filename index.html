@@ -69,10 +69,17 @@
       height: 420px;
       display: block;
     }
+    .note-info {
+      font-size: 0.85rem;
+      color: #666;
+      margin-top: 10px;
+      margin-bottom: 5px;
+      text-align: right;
+    }
     .mic-info {
       font-size: 0.95rem;
       font-weight: bold;
-      margin-top: 15px;
+      margin-top: 5px;
       padding: 8px;
       border-radius: 6px;
     }
@@ -99,7 +106,7 @@
       <input type="number" id="valC" value="47" step="any">
     </div>
     <div class="calc-result" id="calcResult">
-      理論値 f0= ---- Hz
+      ピーク理論値 ---- Hz
     </div>
   </div>
 
@@ -113,6 +120,12 @@
 
   <canvas id="chartCanvas"></canvas>
 
+  <!-- グラフ下部の補足注釈 -->
+  <div class="note-info">
+    ※ノイズ対策のため、300Hz未満の値をピーク検索対象から除外する。
+  </div>
+
+  <!-- 使用マイク表示 -->
   <div class="mic-info mic-warning" id="micInfo">
     使用マイク: 未接続（アダプタを挿して「測定開始」を押してください）
   </div>
@@ -157,10 +170,10 @@
       const L = L_mH * 1e-3;
       const C = C_nF * 1e-9;
       theoreticalFreq = 1 / (2 * Math.PI * Math.sqrt(L * C));
-      calcResult.innerText = `理論値 f0= ${theoreticalFreq.toFixed(1)} Hz`;
+      calcResult.innerText = `ピーク理論値 ${theoreticalFreq.toFixed(1)} Hz`;
     } else {
       theoreticalFreq = null;
-      calcResult.innerText = `理論値 f0= 計算不可`;
+      calcResult.innerText = `ピーク理論値 ---- Hz`;
     }
     drawChart();
   }
@@ -221,7 +234,7 @@
       ctx.fillText(`ピーク理論値 ${theoreticalFreq.toFixed(1)}Hz`, xTheory, paddingTop - 25);
     }
 
-    // 3. 全取得データの描画（過渡ノイズ除去対策組み込み）
+    // 3. 全取得データの描画（ノイズ対策組み込み）
     if (plotData.length > 0) {
       // 300Hz以上の有効データから真の共振ピークと最大振幅（スケール）を算出
       const validDataForPeak = plotData.filter(d => d.freq >= 300);
@@ -239,7 +252,6 @@
 
       plotData.forEach((pt, index) => {
         const x = paddingLeft + ((pt.freq - axisMinFreq) / (axisMaxFreq - axisMinFreq)) * plotWidth;
-        // 低周波スパイクでグラフの上枠を突き抜けないよう最大値でクリッピング
         const normalizedRms = Math.min(pt.rms, maxRms);
         const y = paddingTop + plotHeight - (normalizedRms / maxRms) * (plotHeight - 10);
         
